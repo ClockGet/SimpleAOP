@@ -40,11 +40,15 @@
     <Reference Include="System.Xml" />
   </ItemGroup>
   <ItemGroup>
+    <Compile Include="Container.cs" />
     <Compile Include="Delegate.cs" />
+    <Compile Include="GenericParameterMapper.cs" />
     <Compile Include="HandlerAttribute.cs" />
     <Compile Include="ICallHandler.cs" />
     <Compile Include="IMethodInvocation.cs" />
     <Compile Include="IMethodReturn.cs" />
+    <Compile Include="InterceptingClassGenerator.cs" />
+    <Compile Include="InterceptionAttributeAnalysis.cs" />
     <Compile Include="IParameterCollection.cs" />
     <Compile Include="MethodInvocation.cs" />
     <Compile Include="MethodReturn.cs" />
