@@ -23,6 +23,11 @@ namespace SimpleAOP
             get;
             set;
         }
+        object this[int index]
+        {
+            get;
+            set;
+        }
 
         string ParameterName(int index);
 
