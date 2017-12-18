@@ -87,6 +87,11 @@ namespace SimpleAOP
 
             var parameterInfos = methodInfo.GetParameters();
             int parameterLength = parameterInfos.Length;
+            int paramNum = 1;
+            foreach(ParameterInfo pi2 in parameterInfos)
+            {
+                methodBuilder.DefineParameter(paramNum++, pi2.Attributes, pi2.Name);
+            }
             //the ref parameter(ref or out) set a default value
             for (int i = 0; i < parameterLength; i++)
             {
@@ -121,13 +126,15 @@ namespace SimpleAOP
                     parameterType = parameterType.GetElementType();
                 if (parameterInfos[i].ParameterType.IsValueType || parameterInfos[i].ParameterType.IsGenericParameter)
                 {
-                    if (isByRef)
-                        il.Emit(OpCodes.Ldobj, parameterType);
-                    il.Emit(OpCodes.Box, parameterType);
+                    il.Emit(OpCodes.Box, parameterInfos[i].ParameterType);
                 }
                 else if (isByRef)
                 {
-                    il.Emit(OpCodes.Ldind_Ref);
+                    il.Emit(OpCodes.Ldobj,parameterType);
+                    if(parameterType.IsValueType || parameterType.IsGenericParameter)
+                    {
+                        il.Emit(OpCodes.Box, parameterType);
+                    }
                 }
                 il.Emit(OpCodes.Stelem_Ref);
             }
