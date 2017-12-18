@@ -46,11 +46,7 @@ namespace SimpleAOP
             }
             il.Emit(OpCodes.Call, method);
             il.Emit(OpCodes.Ret);
-            Type delegateType = null;
-            if (method.ReturnType == typeof(void))
-                delegateType = Type.GetType($"System.Action`{parameterTypes.Length}").MakeGenericType(parameterTypes);
-            else
-                delegateType = Type.GetType($"System.Func`{parameterTypes.Length + 1}").MakeGenericType(parameterTypes.Concat(new Type[] { method.ReturnType }).ToArray());
+            Type delegateType = Expression.GetDelegateType(parameterTypes.Concat(method.ReturnType != typeof(void) ? new Type[] { method.ReturnType } : new Type[] { typeof(void) }).ToArray());
             return dm.CreateDelegate(delegateType);
         }
         public static InvokeHandlerDelegate ConvertToDelegate(MethodInfo methodInfo)
