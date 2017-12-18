@@ -39,6 +39,7 @@ namespace SimpleAOP
         public Type GenerateType()
         {
             AddConstructors();
+            new InterceptionAttributeAnalysis(_typeBuilder, _typeToIntercept).Analysis();
             return _typeBuilder.CreateType();
         }
         private void AddConstructor(ConstructorInfo ctor)

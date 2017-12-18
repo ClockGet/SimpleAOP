@@ -10,6 +10,7 @@ namespace SimpleAOP
     public class AOPContainer
     {
         private static ConcurrentDictionary<Type, Type> derivedClasses = new ConcurrentDictionary<Type, Type>();
+        private ConcurrentDictionary<Type, Type> typeMap = new ConcurrentDictionary<Type, Type>();
         private bool CanIntercept(Type type)
         {
             if (type == null)
@@ -42,11 +43,20 @@ namespace SimpleAOP
         }
         public void Register(Type type)
         {
-            CreateProxyType(type);
+            typeMap.GetOrAdd(type, CreateProxyType(type));
         }
         public void Register<T>()
         {
             Register(typeof(T));
+        }
+        public T Resolve<T>()
+        {
+            Type type;
+            if(typeMap.TryGetValue(typeof(T),out type))
+            {
+                return (T)Activator.CreateInstance(type);
+            }
+            return default(T);
         }
     }
 }
