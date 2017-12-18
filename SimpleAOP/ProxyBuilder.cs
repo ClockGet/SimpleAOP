@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Reflection.Emit;
 
 namespace SimpleAOP
 {
@@ -34,12 +35,31 @@ namespace SimpleAOP
          *      }
          *  }
          */
+        private static Delegate FixCall(MethodInfo method)
+        {
+            var parameterTypes = new Type[] { method.DeclaringType }.Concat(method.GetParameters().Select(p => p.ParameterType)).ToArray();
+            DynamicMethod dm = new DynamicMethod($"__DynamicMethod__{method.Name}", MethodAttributes.Public | MethodAttributes.Static, CallingConventions.Standard, method.ReturnType, parameterTypes, method.DeclaringType, false);
+            var il = dm.GetILGenerator();
+            for (int i = 0; i < parameterTypes.Length; i++)
+            {
+                il.Emit(OpCodes.Ldarg, i);
+            }
+            il.Emit(OpCodes.Call, method);
+            il.Emit(OpCodes.Ret);
+            Type delegateType = null;
+            if (method.ReturnType == typeof(void))
+                delegateType = Type.GetType($"System.Action`{parameterTypes.Length}").MakeGenericType(parameterTypes);
+            else
+                delegateType = Type.GetType($"System.Func`{parameterTypes.Length + 1}").MakeGenericType(parameterTypes.Concat(new Type[] { method.ReturnType }).ToArray());
+            return dm.CreateDelegate(delegateType);
+        }
         public static InvokeHandlerDelegate ConvertToDelegate(MethodInfo methodInfo)
         {
             var p = Expression.Parameter(typeof(IMethodInvocation), "input");
             var arguments = Expression.Property(p, typeof(IMethodInvocation).GetProperty("Arguments"));
             var instance = Expression.Property(p, typeof(IMethodInvocation).GetProperty("Target"));
             var index = 0;
+            var fixCallMethod = FixCall(methodInfo);
             List<ParameterExpression> methodParameters = new List<ParameterExpression>();
             ParameterExpression v;
             List<Expression> localLogic = new List<Expression>();
@@ -55,19 +75,44 @@ namespace SimpleAOP
                 methodParameters.Add(v);
                 index++;
             }
-            
+
             var exception = Expression.Parameter(typeof(Exception), "exception");
-            var tryCatchBody = Expression.TryCatch(
+            TryExpression tryCatchBody;
+            if (methodInfo.ReturnType != typeof(void))
+            {
+                tryCatchBody = Expression.TryCatch(
                 Expression.Call(
                     p,
                     typeof(IMethodInvocation).GetMethod("CreateMethodReturn"),
                     new Expression[]
                     {
-                        Expression.Convert(Expression.Call(Expression.Convert(instance, methodInfo.DeclaringType), methodInfo, methodParameters.ToArray()),typeof(object)),
+                        Expression.Convert(Expression.Invoke(Expression.Constant(fixCallMethod),new Expression[] {Expression.Convert(instance,methodInfo.DeclaringType) }.Concat(methodParameters).ToArray()),typeof(object)),
+                        //Expression.Call(null, fixCallMethod.Method,new Expression[] {Expression.Convert(instance,methodInfo.DeclaringType) }.Concat(methodParameters).ToArray()),
+                        //Expression.Convert(Expression.Call(Expression.Convert(instance, methodInfo.DeclaringType), methodInfo, methodParameters.ToArray()),typeof(object)),
                         Expression.NewArrayInit(typeof(object),methodParameters.Select(mp=>Expression.Convert(mp,typeof(object))))
                     }),
                 Expression.Catch(exception, Expression.Call(p, typeof(IMethodInvocation).GetMethod("CreateExceptionMethodReturn"), exception))
                 );
+            }
+            else
+            {
+                tryCatchBody = Expression.TryCatch(
+                    Expression.Block(
+                        Expression.Invoke(Expression.Constant(fixCallMethod), new Expression[] { Expression.Convert(instance, methodInfo.DeclaringType) }.Concat(methodParameters).ToArray()),
+                        //Expression.Call(null, fixCallMethod.Method,new Expression[] {Expression.Convert(instance,methodInfo.DeclaringType) }.Concat(methodParameters).ToArray()),
+                        //Expression.Call(Expression.Convert(instance, methodInfo.DeclaringType), methodInfo, methodParameters.ToArray()),
+                        Expression.Call(
+                            p,
+                            typeof(IMethodInvocation).GetMethod("CreateMethodReturn"),
+                            new Expression[]
+                            {
+                                Expression.Constant(null),
+                                Expression.NewArrayInit(typeof(object),methodParameters.Select(mp=>Expression.Convert(mp,typeof(object))))
+                            })
+                        ),
+                    Expression.Catch(exception, Expression.Call(p, typeof(IMethodInvocation).GetMethod("CreateExceptionMethodReturn"), exception))
+                );
+            }
             localLogic.Add(tryCatchBody);
             var body = Expression.Block(methodParameters, localLogic);
             var lambda = Expression.Lambda<InvokeHandlerDelegate>(body, p);
