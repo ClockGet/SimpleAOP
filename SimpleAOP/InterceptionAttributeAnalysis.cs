@@ -146,7 +146,7 @@ namespace SimpleAOP
             il.Emit(OpCodes.Brtrue_S, lbTrue);
             //false
             //handle ref or out parameters
-            var getOutputs = typeof(IParameterCollection).GetMethod("get_Outputs", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
+            var getOutputs = typeof(IMethodReturn).GetMethod("get_Outputs", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
             var getItem = typeof(IParameterCollection).GetMethod("get_Item", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance, null, new Type[] { typeof(string) }, new ParameterModifier[0]);
             for (int i = 0; i < parameterLength; i++)
             {
@@ -166,7 +166,7 @@ namespace SimpleAOP
                     }
                     else
                     {
-                        il.Emit(OpCodes.Castclass, parameterType);
+                        il.Emit(OpCodes.Castclass, parameterType.GetElementType());
                         il.Emit(OpCodes.Stind_Ref);
                     }
                 }
