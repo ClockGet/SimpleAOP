@@ -50,11 +50,11 @@ namespace SimpleAOP
                     list.Add(attr.CreateHandler());
                 }
                 ProxyBuilder builder = new ProxyBuilder(ProxyBuilder.ConvertToDelegate(method));
-                foreach(var list in callHandlers)
+                foreach (var list in callHandlers)
                 {
                     if (list == null)
                         continue;
-                    foreach(var call in list)
+                    foreach (var call in list)
                     {
                         builder.Use(call.Invoke);
                     }
@@ -88,7 +88,7 @@ namespace SimpleAOP
             var parameterInfos = methodInfo.GetParameters();
             int parameterLength = parameterInfos.Length;
             int paramNum = 1;
-            foreach(ParameterInfo pi2 in parameterInfos)
+            foreach (ParameterInfo pi2 in parameterInfos)
             {
                 methodBuilder.DefineParameter(paramNum++, pi2.Attributes, pi2.Name);
             }
@@ -97,13 +97,13 @@ namespace SimpleAOP
             {
                 if (parameterInfos[i].ParameterType.IsByRef)
                 {
-                    il.Emit(OpCodes.Ldarg, i + 1);
+                    EmitLoadArgument(il, i);
                     il.Emit(OpCodes.Initobj, parameterInfos[i].ParameterType.GetElementType());
                 }
             }
             //ProxyDelegate proxyDelegate=ProxyMap<$Type>.Map[$methodCount];
             il.Emit(OpCodes.Ldsfld, _mapFieldInfo);
-            il.Emit(OpCodes.Ldc_I4, methodCount);
+            EmitLoadConstant(il, methodCount);
             il.Emit(OpCodes.Callvirt, _mapGetMethod);
             il.Emit(OpCodes.Stloc_0);                   //set the value to local 0
 
@@ -112,14 +112,14 @@ namespace SimpleAOP
             il.Emit(OpCodes.Ldfld, typeof(ProxyDelegate).GetField("methodInfo"));
 
             //new object[]
-            il.Emit(OpCodes.Ldc_I4, parameterLength);
+            EmitLoadConstant(il, parameterLength);
             il.Emit(OpCodes.Newarr, typeof(object));
 
             for (int i = 0; i < parameterLength; i++)
             {
                 il.Emit(OpCodes.Dup);//copy the value to the top of the stack
-                il.Emit(OpCodes.Ldc_I4, i);
-                il.Emit(OpCodes.Ldarg, i + 1);
+                EmitLoadConstant(il, i);
+                EmitLoadArgument(il, i);
                 var parameterType = parameterInfos[i].ParameterType;
                 var isByRef = parameterType.IsByRef;
                 if (isByRef)
@@ -130,8 +130,8 @@ namespace SimpleAOP
                 }
                 else if (isByRef)
                 {
-                    il.Emit(OpCodes.Ldobj,parameterType);
-                    if(parameterType.IsValueType || parameterType.IsGenericParameter)
+                    il.Emit(OpCodes.Ldobj, parameterType);
+                    if (parameterType.IsValueType || parameterType.IsGenericParameter)
                     {
                         il.Emit(OpCodes.Box, parameterType);
                     }
@@ -154,28 +154,28 @@ namespace SimpleAOP
             //false
             //handle ref or out parameters
             var getOutputs = typeof(IMethodReturn).GetMethod("get_Outputs", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance);
-            var getItem = typeof(IParameterCollection).GetMethod("get_Item", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance, null, new Type[] { typeof(string) }, new ParameterModifier[0]);
+            var getItem = typeof(IParameterCollection).GetMethod("get_Item", BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance, null, new Type[] { typeof(int) }, new ParameterModifier[0]);
+            int refParamNums = 0;
             for (int i = 0; i < parameterLength; i++)
             {
                 var parameterType = parameterInfos[i].ParameterType;
                 if (parameterType.IsByRef)
                 {
-                    il.Emit(OpCodes.Ldarg, i + 1);
+                    EmitLoadArgument(il, i);
                     il.Emit(OpCodes.Ldloc_2);
                     il.Emit(OpCodes.Callvirt, getOutputs);
-                    il.Emit(OpCodes.Ldstr, parameterInfos[i].Name);
+                    EmitLoadConstant(il, refParamNums++);
                     il.Emit(OpCodes.Callvirt, getItem);
-                    if (parameterType.IsValueType || parameterType.IsGenericParameter)
+                    var elementType = parameterType.GetElementType();
+                    if (elementType.IsValueType || elementType.IsGenericParameter)
                     {
-                        var elementType = parameterType.GetElementType();
                         il.Emit(OpCodes.Unbox_Any, elementType);
-                        il.Emit(OpCodes.Stobj, elementType);
                     }
                     else
                     {
-                        il.Emit(OpCodes.Castclass, parameterType.GetElementType());
-                        il.Emit(OpCodes.Stind_Ref);
+                        il.Emit(OpCodes.Castclass, elementType);
                     }
+                    il.Emit(OpCodes.Stobj, elementType);
                 }
             }
             //return ($ReturnType)r.ReturnValue;
@@ -185,6 +185,8 @@ namespace SimpleAOP
                 il.Emit(OpCodes.Callvirt, typeof(IMethodReturn).GetMethod("get_ReturnValue"));
                 if (methodInfo.ReturnType.IsValueType || methodInfo.ReturnType.IsGenericParameter)
                     il.Emit(OpCodes.Unbox_Any, methodInfo.ReturnType);
+                else
+                    il.Emit(OpCodes.Castclass, methodInfo.ReturnType);
             }
             il.Emit(OpCodes.Ret);
             //ture
@@ -209,22 +211,16 @@ namespace SimpleAOP
             for (int i = 0; i < genericArguments.Length; i++)
             {
                 genericTypes[i].SetGenericParameterAttributes(genericArguments[i].GenericParameterAttributes);
-                List<Type> interfaceConstraints = new List<Type>();
-                Type[] genericParameterConstraints = genericArguments[i].GetGenericParameterConstraints();
-                foreach (Type constraint in genericParameterConstraints)
+                Type[] source = genericArguments[i].GetGenericParameterConstraints();
+                Type[] interfaceConstraints = source.Where(t => t.IsInterface).ToArray();
+                Type baseConstraint = source.Where(t => !t.IsInterface).FirstOrDefault();
+                if(baseConstraint!=(Type)null)
                 {
-                    if (constraint.IsClass)
-                    {
-                        genericTypes[i].SetBaseTypeConstraint(constraint);
-                    }
-                    else
-                    {
-                        interfaceConstraints.Add(constraint);
-                    }
+                    genericTypes[i].SetBaseTypeConstraint(baseConstraint);
                 }
-                if (interfaceConstraints.Count > 0)
+                if(interfaceConstraints.Length>0)
                 {
-                    genericTypes[i].SetInterfaceConstraints(interfaceConstraints.ToArray());
+                    genericTypes[i].SetInterfaceConstraints(interfaceConstraints);
                 }
             }
         }
@@ -256,6 +252,61 @@ namespace SimpleAOP
             }
             return false;
         }
+        #region Utility
+        //   Original C# code written by
+        //   Unity - https://github.com/unitycontainer/unity
+        //	 Copyright (C) 2015-2017 Microsoft
+        // 
+        //   Licensed under the Apache License, Version 2.0 (the "License"); you may not use this product except in 
+        //   compliance with the License. You may obtain a copy of the License at
+        //
+        //   http://www.apache.org/licenses/LICENSE-2.0
+        //
+        //   Unless required by applicable law or agreed to in writing, software distributed under the License is 
+        //   distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. 
+        //   See the License for the specific language governing permissions and limitations under the License.
+        //
+        private static readonly OpCode[] LoadConstOpCodes = new OpCode[9]
+        {
+            OpCodes.Ldc_I4_0,
+            OpCodes.Ldc_I4_1,
+            OpCodes.Ldc_I4_2,
+            OpCodes.Ldc_I4_3,
+            OpCodes.Ldc_I4_4,
+            OpCodes.Ldc_I4_5,
+            OpCodes.Ldc_I4_6,
+            OpCodes.Ldc_I4_7,
+            OpCodes.Ldc_I4_8
+        };
+        private static readonly OpCode[] LoadArgsOpCodes = new OpCode[3]
+        {
+            OpCodes.Ldarg_1,
+            OpCodes.Ldarg_2,
+            OpCodes.Ldarg_3
+        };
+        private static void EmitLoadConstant(ILGenerator il, int i)
+        {
+            if (i < LoadConstOpCodes.Length)
+            {
+                il.Emit(LoadConstOpCodes[i]);
+            }
+            else
+            {
+                il.Emit(OpCodes.Ldc_I4, i);
+            }
+        }
+        private static void EmitLoadArgument(ILGenerator il, int argumentNumber)
+        {
+            if (argumentNumber < LoadArgsOpCodes.Length)
+            {
+                il.Emit(LoadArgsOpCodes[argumentNumber]);
+            }
+            else
+            {
+                il.Emit(OpCodes.Ldarg, argumentNumber + 1);
+            }
+        }
+        #endregion
 
     }
 }
