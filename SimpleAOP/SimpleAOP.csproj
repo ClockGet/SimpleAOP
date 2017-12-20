@@ -51,6 +51,7 @@
     <Compile Include="InterceptionAttributeAnalysis.cs" />
     <Compile Include="IParameterCollection.cs" />
     <Compile Include="MethodInvocation.cs" />
+    <Compile Include="MethodOverrideParameterMapper.cs" />
     <Compile Include="MethodReturn.cs" />
     <Compile Include="ParameterCollection.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />

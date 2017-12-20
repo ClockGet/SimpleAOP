@@ -15,8 +15,9 @@ namespace SimpleAOP
         private List<ProxyDelegate> _proxyDelegates;
         private FieldInfo _mapFieldInfo;
         private MethodInfo _mapGetMethod;
+        private GenericParameterMapper _targetTypeParameterMapper;
         private int methodCount;
-        public InterceptionAttributeAnalysis(TypeBuilder typeBuilder, Type typeToIntercept)
+        public InterceptionAttributeAnalysis(TypeBuilder typeBuilder, Type typeToIntercept, GenericParameterMapper targetTypeParameterMapper)
         {
             _typeBuilder = typeBuilder;
             _typeToIntercept = typeToIntercept;
@@ -25,11 +26,17 @@ namespace SimpleAOP
             {
                 _targetMethodInfos = _targetMethodInfos.Where(methodInfo => HasInterceptionAttribute(methodInfo));
             }
-            var mapType = typeof(ProxyMap<>).MakeGenericType(_typeToIntercept);
+            var targetType = _typeToIntercept;
+            if(_typeToIntercept.IsGenericType)
+            {
+                targetType = ((ModuleBuilder)_typeBuilder.Module).DefineType($"__Anonymous__GenericType__{_typeToIntercept.Name}",TypeAttributes.Public|TypeAttributes.BeforeFieldInit|TypeAttributes.Sealed).CreateType();
+            }
+            var mapType = typeof(ProxyMap<>).MakeGenericType(targetType);
             _mapFieldInfo = mapType.GetField("Map", BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
             _proxyDelegates = (List<ProxyDelegate>)_mapFieldInfo.GetValue(null);
             _mapGetMethod = _mapFieldInfo.FieldType.GetMethod("get_Item", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public, null, new Type[] { typeof(int) }, new ParameterModifier[0]);
             methodCount = _proxyDelegates.Count;
+            _targetTypeParameterMapper = targetTypeParameterMapper;
         }
         public void Analysis()
         {
@@ -76,8 +83,14 @@ namespace SimpleAOP
         private void AddMethod(MethodInfo methodInfo, InvokeHandlerDelegate @delegate)
         {
             var attr = methodInfo.Attributes & ~MethodAttributes.VtableLayoutMask & ~MethodAttributes.Abstract;
-            var methodBuilder = _typeBuilder.DefineMethod(methodInfo.Name, attr, methodInfo.ReturnType, methodInfo.GetParameters().Select(p => p.ParameterType).ToArray());
-            DefineGenericArguments(methodBuilder, methodInfo);
+            var methodBuilder = _typeBuilder.DefineMethod(methodInfo.Name, attr);
+            
+            Type declaringType = methodInfo.DeclaringType;
+            GenericParameterMapper mapper = (declaringType.IsGenericType && declaringType != methodInfo.ReflectedType) ? new GenericParameterMapper(declaringType, _targetTypeParameterMapper) : _targetTypeParameterMapper;
+            MethodOverrideParameterMapper paraMapper = new MethodOverrideParameterMapper(methodInfo);
+            paraMapper.SetupParameters(methodBuilder, mapper);
+            methodBuilder.SetReturnType(paraMapper.GetReturnType());
+            methodBuilder.SetParameters(methodInfo.GetParameters().Select(pi => paraMapper.GetParameterType(pi.ParameterType)).ToArray());
             var il = methodBuilder.GetILGenerator();
             il.DeclareLocal(typeof(ProxyDelegate));     //local 0
             il.DeclareLocal(typeof(MethodInvocation));  //local 1
@@ -95,10 +108,10 @@ namespace SimpleAOP
             //the ref parameter(ref or out) set a default value
             for (int i = 0; i < parameterLength; i++)
             {
-                if (parameterInfos[i].ParameterType.IsByRef)
+                if (paraMapper.GetParameterType(parameterInfos[i].ParameterType).IsByRef)
                 {
                     EmitLoadArgument(il, i);
-                    il.Emit(OpCodes.Initobj, parameterInfos[i].ParameterType.GetElementType());
+                    il.Emit(OpCodes.Initobj, paraMapper.GetElementType(parameterInfos[i].ParameterType));
                 }
             }
             //ProxyDelegate proxyDelegate=ProxyMap<$Type>.Map[$methodCount];
@@ -120,13 +133,13 @@ namespace SimpleAOP
                 il.Emit(OpCodes.Dup);//copy the value to the top of the stack
                 EmitLoadConstant(il, i);
                 EmitLoadArgument(il, i);
-                var parameterType = parameterInfos[i].ParameterType;
+                var parameterType = paraMapper.GetParameterType(parameterInfos[i].ParameterType);
                 var isByRef = parameterType.IsByRef;
                 if (isByRef)
                     parameterType = parameterType.GetElementType();
                 if (parameterInfos[i].ParameterType.IsValueType || parameterInfos[i].ParameterType.IsGenericParameter)
                 {
-                    il.Emit(OpCodes.Box, parameterInfos[i].ParameterType);
+                    il.Emit(OpCodes.Box, paraMapper.GetParameterType( parameterInfos[i].ParameterType));
                 }
                 else if (isByRef)
                 {
@@ -158,7 +171,7 @@ namespace SimpleAOP
             int refParamNums = 0;
             for (int i = 0; i < parameterLength; i++)
             {
-                var parameterType = parameterInfos[i].ParameterType;
+                var parameterType = paraMapper.GetParameterType(parameterInfos[i].ParameterType);
                 if (parameterType.IsByRef)
                 {
                     EmitLoadArgument(il, i);
@@ -179,14 +192,15 @@ namespace SimpleAOP
                 }
             }
             //return ($ReturnType)r.ReturnValue;
-            if (methodInfo.ReturnType != typeof(void))
+            var returnType = paraMapper.GetReturnType();
+            if (returnType != typeof(void))
             {
                 il.Emit(OpCodes.Ldloc_2);
                 il.Emit(OpCodes.Callvirt, typeof(IMethodReturn).GetMethod("get_ReturnValue"));
-                if (methodInfo.ReturnType.IsValueType || methodInfo.ReturnType.IsGenericParameter)
-                    il.Emit(OpCodes.Unbox_Any, methodInfo.ReturnType);
+                if (returnType.IsValueType || returnType.IsGenericParameter)
+                    il.Emit(OpCodes.Unbox_Any, returnType);
                 else
-                    il.Emit(OpCodes.Castclass, methodInfo.ReturnType);
+                    il.Emit(OpCodes.Castclass, returnType);
             }
             il.Emit(OpCodes.Ret);
             //ture
@@ -198,31 +212,6 @@ namespace SimpleAOP
             //increase methodCount
             methodCount++;
 
-        }
-        private static void DefineGenericArguments(MethodBuilder methodBuilder, MethodInfo baseMethod)
-        {
-            if (!baseMethod.IsGenericMethod)
-            {
-                return;
-            }
-            Type[] genericArguments = baseMethod.GetGenericArguments();
-            GenericTypeParameterBuilder[] genericTypes = methodBuilder.DefineGenericParameters((from t in genericArguments
-                                                                                                select t.Name).ToArray());
-            for (int i = 0; i < genericArguments.Length; i++)
-            {
-                genericTypes[i].SetGenericParameterAttributes(genericArguments[i].GenericParameterAttributes);
-                Type[] source = genericArguments[i].GetGenericParameterConstraints();
-                Type[] interfaceConstraints = source.Where(t => t.IsInterface).ToArray();
-                Type baseConstraint = source.Where(t => !t.IsInterface).FirstOrDefault();
-                if(baseConstraint!=(Type)null)
-                {
-                    genericTypes[i].SetBaseTypeConstraint(baseConstraint);
-                }
-                if(interfaceConstraints.Length>0)
-                {
-                    genericTypes[i].SetInterfaceConstraints(interfaceConstraints);
-                }
-            }
         }
         private bool HasInterceptionAttribute(Type type)
         {
